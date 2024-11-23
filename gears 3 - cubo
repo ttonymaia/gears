@@ -1,0 +1,163 @@
+#include <fstream> // Para salvar os resultados em arquivo
+#include <G4RunManager.hh>
+#include <G4NistManager.hh>
+#include <G4Box.hh>
+#include <G4LogicalVolume.hh>
+#include <G4PVPlacement.hh>
+#include <G4SystemOfUnits.hh>
+#include <G4ParticleGun.hh>
+#include <G4ParticleTable.hh>
+#include <G4MuonMinus.hh>
+#include <G4VUserDetectorConstruction.hh>
+#include <G4VUserPrimaryGeneratorAction.hh>
+#include <G4PhysListFactory.hh>
+#include <G4UserEventAction.hh>
+#include <G4UserSteppingAction.hh>
+#include <G4Event.hh>
+#include <G4Step.hh>
+#include <G4VisExecutive.hh>
+#include <G4UIExecutive.hh>
+#include <G4VisManager.hh>
+
+using namespace std;
+
+// Classe para definir a geometria do detector
+class ConcreteGeometry : public G4VUserDetectorConstruction {
+public:
+    G4VPhysicalVolume* Construct() override {
+        G4NistManager* nist = G4NistManager::Instance();
+
+        // Define o mundo
+        G4double world_size = 5.0 * m;
+        G4Material* air = nist->FindOrBuildMaterial("G4_AIR");
+        G4Box* worldBox = new G4Box("World", world_size, world_size, world_size);
+        G4LogicalVolume* worldLog = new G4LogicalVolume(worldBox, air, "World");
+        G4VPhysicalVolume* worldPhys = new G4PVPlacement(nullptr, {}, worldLog, "World", nullptr, false, 0);
+
+        // Define o bloco de concreto
+        G4double concrete_size = 2.0 * m;
+        G4Material* concrete = nist->FindOrBuildMaterial("G4_CONCRETE");
+        G4Box* concreteBox = new G4Box("Concrete", concrete_size, concrete_size, concrete_size);
+        G4LogicalVolume* concreteLog = new G4LogicalVolume(concreteBox, concrete, "Concrete");
+
+        // Coloca o bloco de concreto no mundo
+        new G4PVPlacement(nullptr, {}, concreteLog, "Concrete", worldLog, false, 0);
+
+        // Define o vazio no centro do concreto
+        G4double void_size = 0.5 * m; // Dimensão do vazio
+        G4Material* vacuum = nist->FindOrBuildMaterial("G4_Galactic"); // Material para o vazio
+        G4Box* voidBox = new G4Box("Void", void_size, void_size, void_size);
+        G4LogicalVolume* voidLog = new G4LogicalVolume(voidBox, vacuum, "Void");
+
+        // Coloca o vazio dentro do concreto
+        new G4PVPlacement(nullptr, {}, voidLog, "Void", concreteLog, false, 0);
+
+        return worldPhys;
+    }
+};
+
+// Classe para configurar a fonte de múons
+class MuonSource : public G4VUserPrimaryGeneratorAction {
+private:
+    G4ParticleGun* particleGun;
+
+public:
+    MuonSource() {
+        particleGun = new G4ParticleGun(1);
+        G4ParticleTable* particleTable = G4ParticleTable::GetParticleTable();
+        G4ParticleDefinition* muon = particleTable->FindParticle("mu-");
+        particleGun->SetParticleDefinition(muon);
+        particleGun->SetParticleEnergy(4 * GeV);
+        particleGun->SetParticleMomentumDirection(G4ThreeVector(0, 0, -1));
+        particleGun->SetParticlePosition(G4ThreeVector(0, 0, 2 * m));
+    }
+
+    void GeneratePrimaries(G4Event* anEvent) override {
+        particleGun->GeneratePrimaryVertex(anEvent);
+    }
+};
+
+// Classe para registrar passos e salvar dados em arquivo
+class SteppingAction : public G4UserSteppingAction {
+private:
+    ofstream outputFile;
+
+public:
+    SteppingAction() {
+        // Abre o arquivo para salvar os resultados
+        outputFile.open("simulation_results.txt");
+        if (!outputFile.is_open()) {
+            G4cerr << "Erro ao abrir o arquivo para salvar os resultados!" << G4endl;
+            exit(1);
+        }
+        outputFile << "TrackID\tPosX (m)\tPosY (m)\tPosZ (m)\tEnergia Depositada (keV)" << endl;
+    }
+
+    ~SteppingAction() {
+        // Fecha o arquivo ao final da execução
+        if (outputFile.is_open()) {
+            outputFile.close();
+        }
+    }
+
+    void UserSteppingAction(const G4Step* step) override {
+        G4double energyDeposit = step->GetTotalEnergyDeposit();
+        if (energyDeposit > 0) {
+            G4ThreeVector position = step->GetPreStepPoint()->GetPosition();
+            // Salva as coordenadas e energia no arquivo
+            outputFile << step->GetTrack()->GetTrackID() << "\t"
+                       << position.x() / m << "\t"
+                       << position.y() / m << "\t"
+                       << position.z() / m << "\t"
+                       << energyDeposit / keV << endl;
+        }
+    }
+};
+
+// Função principal
+int main(int argc, char** argv) {
+    // Inicializa o run manager
+    G4RunManager* runManager = new G4RunManager();
+
+    // Configura a Physics List
+    G4PhysListFactory physicsFactory;
+    G4VModularPhysicsList* physicsList = physicsFactory.GetReferencePhysList("FTFP_BERT");
+    runManager->SetUserInitialization(physicsList);
+
+    // Define a geometria
+    ConcreteGeometry* geometry = new ConcreteGeometry();
+    runManager->SetUserInitialization(geometry);
+
+    // Define a fonte de múons
+    MuonSource* muonSource = new MuonSource();
+    runManager->SetUserAction(muonSource);
+
+    // Define ações de passo
+    SteppingAction* steppingAction = new SteppingAction();
+    runManager->SetUserAction(steppingAction);
+
+    // Inicializa a simulação
+    runManager->Initialize();
+
+    // Configura o sistema de visualização
+    G4VisManager* visManager = new G4VisExecutive();
+    visManager->Initialize();
+
+    G4UIExecutive* uiExecutive = new G4UIExecutive(argc, argv);
+    G4UImanager::GetUIpointer()->ApplyCommand("/vis/open OGL");
+    G4UImanager::GetUIpointer()->ApplyCommand("/vis/drawVolume");
+    G4UImanager::GetUIpointer()->ApplyCommand("/vis/viewer/set/autoRefresh true");
+    G4UImanager::GetUIpointer()->ApplyCommand("/vis/scene/add/trajectories");
+    G4UImanager::GetUIpointer()->ApplyCommand("/vis/scene/endOfEventAction accumulate");
+
+    // Executa a simulação interativa
+    uiExecutive->SessionStart();
+
+    // Libera memória
+    delete visManager;
+    delete uiExecutive;
+    delete runManager;
+
+    G4cout << "Simulação concluída. Resultados salvos em 'simulation_results.txt'." << G4endl;
+    return 0;
+}
