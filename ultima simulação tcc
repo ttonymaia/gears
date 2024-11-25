@@ -1,0 +1,154 @@
+#include <fstream> // Para salvar os resultados em arquivo
+#include <G4RunManager.hh>
+#include <G4NistManager.hh>
+#include <G4Box.hh>
+#include <G4Tubs.hh>
+#include <G4LogicalVolume.hh>
+#include <G4PVPlacement.hh>
+#include <G4SystemOfUnits.hh>
+#include <G4ParticleGun.hh>
+#include <G4ParticleTable.hh>
+#include <G4VUserDetectorConstruction.hh>
+#include <G4VUserPrimaryGeneratorAction.hh>
+#include <G4PhysListFactory.hh>
+#include <G4UserSteppingAction.hh>
+#include <G4Step.hh>
+#include <random>
+
+// Classe para definir a geometria com um vazio representando a patologia
+class ConcreteWithDefect : public G4VUserDetectorConstruction {
+public:
+    G4VPhysicalVolume* Construct() override {
+        G4NistManager* nist = G4NistManager::Instance();
+
+        // Define o mundo
+        G4double world_size = 10.0 * m;
+        G4Material* air = nist->FindOrBuildMaterial("G4_AIR");
+        G4Box* worldBox = new G4Box("World", world_size / 2, world_size / 2, world_size / 2);
+        G4LogicalVolume* worldLog = new G4LogicalVolume(worldBox, air, "World");
+        G4VPhysicalVolume* worldPhys = new G4PVPlacement(nullptr, {}, worldLog, "World", nullptr, false, 0);
+
+        // Define o bloco de concreto
+        G4double concrete_sizeX = 2.0 * m;
+        G4double concrete_sizeY = 2.0 * m;
+        G4double concrete_sizeZ = 2.0 * m;
+        G4Material* concrete = nist->FindOrBuildMaterial("G4_CONCRETE");
+        G4Box* concreteBox = new G4Box("Concrete", concrete_sizeX / 2, concrete_sizeY / 2, concrete_sizeZ / 2);
+        G4LogicalVolume* concreteLog = new G4LogicalVolume(concreteBox, concrete, "Concrete");
+
+        // Coloca o bloco de concreto no mundo
+        new G4PVPlacement(nullptr, {}, concreteLog, "Concrete", worldLog, false, 0);
+
+        // Adiciona um vazio (patologia) no concreto
+        G4double defect_radius = 0.3 * m; // Raio do vazio (patologia)
+        G4double defect_height = concrete_sizeZ; // Altura do vazio
+        G4Material* vacuum = nist->FindOrBuildMaterial("G4_Galactic");
+        G4Tubs* defectCyl = new G4Tubs("Defect", 0, defect_radius, defect_height / 2, 0, 360 * deg);
+        G4LogicalVolume* defectLog = new G4LogicalVolume(defectCyl, vacuum, "Defect");
+
+        // Posiciona o vazio (patologia) no centro do concreto
+        new G4PVPlacement(
+            nullptr,
+            G4ThreeVector(0, 0, 0), // Ajuste a posição da patologia conforme necessário
+            defectLog,
+            "Defect",
+            concreteLog,
+            false,
+            0
+        );
+
+        return worldPhys;
+    }
+};
+
+// Classe para configurar a fonte de múons
+class MuonSource : public G4VUserPrimaryGeneratorAction {
+private:
+    G4ParticleGun* particleGun;
+    std::random_device rd;
+    std::mt19937 gen;
+    std::uniform_real_distribution<> distX;
+    std::uniform_real_distribution<> distY;
+
+public:
+    MuonSource()
+        : gen(rd()), distX(-1.0 * m, 1.0 * m), distY(-1.0 * m, 1.0 * m) {
+        particleGun = new G4ParticleGun(1);
+        G4ParticleTable* particleTable = G4ParticleTable::GetParticleTable();
+        G4ParticleDefinition* muon = particleTable->FindParticle("mu-");
+        particleGun->SetParticleDefinition(muon);
+        particleGun->SetParticleEnergy(4 * GeV);
+    }
+
+    void GeneratePrimaries(G4Event* anEvent) override {
+        // Gera múons distribuídos em uma superfície acima do bloco
+        G4double xPos = distX(gen);
+        G4double yPos = distY(gen);
+        G4double zPos = 3.0 * m; // Altura acima do bloco
+
+        particleGun->SetParticlePosition(G4ThreeVector(xPos, yPos, zPos));
+        particleGun->SetParticleMomentumDirection(G4ThreeVector(0, 0, -1)); // Direção vertical para baixo
+        particleGun->GeneratePrimaryVertex(anEvent);
+    }
+};
+
+// Classe para registrar passos e salvar dados em arquivo
+class SteppingAction : public G4UserSteppingAction {
+private:
+    std::ofstream outputFile;
+
+public:
+    SteppingAction() {
+        outputFile.open("muography_results.txt");
+        if (!outputFile.is_open()) {
+            G4cerr << "Erro ao abrir o arquivo para salvar os resultados!" << G4endl;
+            exit(1);
+        }
+        outputFile << "PosX (m)\tPosY (m)\tEnergia Depositada (GeV)" << std::endl;
+    }
+
+    ~SteppingAction() {
+        if (outputFile.is_open()) {
+            outputFile.close();
+        }
+    }
+
+    void UserSteppingAction(const G4Step* step) override {
+        G4double energyDeposit = step->GetTotalEnergyDeposit();
+        if (energyDeposit > 0) {
+            G4ThreeVector position = step->GetPreStepPoint()->GetPosition();
+            outputFile << position.x() / m << "\t"
+                       << position.y() / m << "\t"
+                       << energyDeposit / GeV << std::endl;
+        }
+    }
+};
+
+// Função principal
+int main(int argc, char** argv) {
+    G4RunManager* runManager = new G4RunManager();
+
+    // Configura a Physics List
+    G4PhysListFactory physicsFactory;
+    G4VModularPhysicsList* physicsList = physicsFactory.GetReferencePhysList("FTFP_BERT");
+    runManager->SetUserInitialization(physicsList);
+
+    // Define a geometria
+    runManager->SetUserInitialization(new ConcreteWithDefect());
+
+    // Define a fonte de múons
+    runManager->SetUserAction(new MuonSource());
+
+    // Define ações de passo
+    runManager->SetUserAction(new SteppingAction());
+
+    // Inicializa a simulação
+    runManager->Initialize();
+
+    // Executa a simulação com 10 milhões de múons
+    G4int nEvents = 10000000; // Ajuste conforme necessário
+    runManager->BeamOn(nEvents);
+
+    delete runManager;
+    return 0;
+}
