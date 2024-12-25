@@ -1,0 +1,13 @@
+/run/initialize * inicio do projeto *
+
+/vis/open OGL * Visualização do projeto *
+
+/vis/drawVolume  * Volume do mundo *
+
+/run/beamOn 100 * Comando que define o numero eventos a ser trabalhado *
+
+/vis/scene/add/axes
+
+/vis/scene/endOfEventAction accumulate * Evento acumulado *
+
+/vis/scene/add/trajectories * Trajetoria das particulas *
