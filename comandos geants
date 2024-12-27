@@ -1,0 +1,10 @@
+/run/initialize
+/vis/open OGL 800x800
+/vis/scene/add/trajectories smooth
+/vis/viewer/set/autoZoom
+/vis/viewer/set/viewpointVector 1 1 1
+/vis/drawVolume
+/run/beamOn 10
+/vis/scene/add/trajectories
+/vis/viewer/zoom 2.0
+/tracking/verbose 1 (detalhes sobre simulação)
